@@ -1,16 +1,22 @@
-from machine import Pin # importacion de las librerias 
+from machine import Pin, mem32
 import time, random
 
-# nombramiento de pines sp32
-ledsitos = [
-    Pin(2, Pin.OUT),
-    Pin(4, Pin.OUT),
-    Pin(5, Pin.OUT)
-]
+# Definicion de los registros para la esp32
+GPIO_OUT_W1TS = 0x3FF44008  # SET bit
+GPIO_OUT_W1TC = 0x3FF4400C  # CLEAR bit
 
-sonido = Pin(18, Pin.OUT)
+# Declaracion inicial de cuales son los pines de los leds para usar la variable
+LED1 = 2
+LED2 = 4
+LED3 = 5
+BUZZ = 18
 
-# pines para el jugador 1
+Pin(LED1, Pin.OUT)
+Pin(LED2, Pin.OUT)
+Pin(LED3, Pin.OUT)
+Pin(BUZZ, Pin.OUT)
+
+# declaracion de los botones de los jugadores en que pines va a estar
 boti1 = [
     Pin(12, Pin.IN, Pin.PULL_DOWN),
     Pin(13, Pin.IN, Pin.PULL_DOWN),
@@ -18,7 +24,6 @@ boti1 = [
     Pin(27, Pin.IN, Pin.PULL_DOWN)
 ]
 
-# pines para el jugador 2
 boti2 = [
     Pin(26, Pin.IN, Pin.PULL_DOWN),
     Pin(25, Pin.IN, Pin.PULL_DOWN),
@@ -26,42 +31,84 @@ boti2 = [
     Pin(32, Pin.IN, Pin.PULL_DOWN)
 ]
 
- # pines de los botones de inicio, simon dice y final
 iniciobot = Pin(15, Pin.IN, Pin.PULL_DOWN)
 simonbot = Pin(19, Pin.IN, Pin.PULL_DOWN)
 salirbot = Pin(21, Pin.IN, Pin.PULL_DOWN)
 
-#funciones que apoyan que el codigo funcione mejor y que guarde bien la informacion de los botones 
+# funciones que apoyan el registro osea a controlar el periferico el led o buzzer
+
+#declaracion de la funcion para que el componente se ponfa en 1 directamente
+
+def set_gpio(pin):
+    mem32[GPIO_OUT_W1TS] = (1 << pin)
+    
+#declaracion de la funcion para que el componente se ponfa en 0 directamente  
+
+def clear_gpio(pin):
+    mem32[GPIO_OUT_W1TC] = (1 << pin)  
+
 def apagar():
-    for l in ledsitos:
-        l.off()
-    sonido.off()
+    clear_gpio(LED1)
+    clear_gpio(LED2)
+    clear_gpio(LED3)
+    clear_gpio(BUZZ)
+
+#funciones que apoyan que el codigo funcione mejor y que guarde bien la informacion de los botones 
 
 def anti_rebote(pin):
     if pin.value():
         time.sleep_ms(40)
-        return pin.value()
+        if pin.value():
+            return 1
     return 0
 
 def esperar_suelte(pin):
     while pin.value():
         time.sleep_ms(10)
 
-def limpiar_botones():
-    while (
-        boti1[0].value() or boti1[1].value() or boti1[2].value() or boti1[3].value() or
-        boti2[0].value() or boti2[1].value() or boti2[2].value() or boti2[3].value() or
-        iniciobot.value() or simonbot.value() or salirbot.value()
-    ):
-        time.sleep_ms(10)
+def salir_presionado():
+    if anti_rebote(salirbot):
+        esperar_suelte(salirbot)
+        apagar()
+        print("\n--- SALIDA MANUAL ACTIVADA ---")
+        return True
+    return False
+
+def cambio_a_simon():
+    if anti_rebote(simonbot):
+        esperar_suelte(simonbot)
+        apagar()
+        print("\n--- CAMBIO INMEDIATO A SIMON ---")
+        juego_simon()
+        return True
+    return False
+
+#  esta sirve para hacer que el codigo genere los estimulos osea prenda los leds
+
+def activar_salida(num):
+    apagar()
+
+    if num == 0:
+        set_gpio(LED1)
+    elif num == 1:
+        set_gpio(LED2)
+    elif num == 2:
+        set_gpio(LED3)
+    else:
+        set_gpio(BUZZ)
 
 # esta funcion espera y guarda que boton se presiona cuando se esta jugando 
+
 def reaccion(salida, jugadores):
+
     inicio = time.ticks_ms()
 
     while True:
 
-        if anti_rebote(salirbot):
+        if salir_presionado():
+            return -1, False, 0
+
+        if cambio_a_simon():
             return -1, False, 0
 
         for i in range(4):
@@ -75,33 +122,44 @@ def reaccion(salida, jugadores):
                     fin = time.ticks_ms()
                     return 2, (i == salida), time.ticks_diff(fin, inicio)
 
-#  esta sirve para hacer que el codigo genere los estimulos osea prenda los leds
-
-def activar_salida(num):
-    apagar()
-    if num < 3:
-        ledsitos[num].on()
-    else:
-        sonido.on()
-
 #  esta funcion sirve para poner el juego de los reflejos aca esta contenido el codigo de ejecucion
+
 def reflejos(jugadores):
 
     puntos = [0,0]
 
     print("\nPresiona INICIO")
+
     while not anti_rebote(iniciobot):
-        pass
+        if salir_presionado():
+            return
+        if cambio_a_simon():
+            return
+
     esperar_suelte(iniciobot)
 
-    rondas = 5 
+    rondas = 5
 
     for r in range(rondas):
+
+        if salir_presionado():
+            return
+
+        if cambio_a_simon():
+            return
 
         print("\n--- RONDA", r+1, "---")
 
         espera = random.randint(1,5)
-        time.sleep(espera)
+
+        for _ in range(espera*10):
+            time.sleep_ms(100)
+
+            if salir_presionado():
+                return
+
+            if cambio_a_simon():
+                return
 
         salida = random.randint(0,3)
         activar_salida(salida)
@@ -109,8 +167,6 @@ def reflejos(jugadores):
         jugador, correcto, tiempo = reaccion(salida, jugadores)
 
         if jugador == -1:
-            apagar()
-            print("Salida manual")
             return
 
         apagar()
@@ -124,33 +180,22 @@ def reflejos(jugadores):
 
         print("Marcador:", puntos)
 
-    print("\n----------------------------")
-    print("        FIN DEL JUEGO")
-    print("------------------------------")
+    print("\ FIN DEL JUEGO")
 
     if jugadores == 2:
-
-        print("Puntaje final:")
         print("Jugador 1:", puntos[0])
         print("Jugador 2:", puntos[1])
-
-        if puntos[0] > puntos[1]:
-            print("\n EL GANADOR ES EL JUGADOR 1")
-        elif puntos[1] > puntos[0]:
-            print("\n EL GANADOR ES EL JUGADOR 2")
-        else:
-            print("\ HUBO UN EMPATEE")
-
     else:
-        print("puntuacion:", puntos[0])
+        print("Puntuacion:", puntos[0])
 
-    print("---------------------------")
     time.sleep(2)
+
 
 # en esta funcion se guarda todo lo del juego de simon dice osea ahi esta el codigo para que funcione
 def juego_simon():
 
-    print("\n JUEGA SIMON DICE ")
+    print("\nJUEGA SIMON DICE")
+
     secuencia = []
     ronda = 0
 
@@ -158,9 +203,7 @@ def juego_simon():
 
     while True:
 
-        if anti_rebote(salirbot):
-            esperar_suelte(salirbot)
-            print("Activaste la salida del simon dice")
+        if salir_presionado():
             return
 
         ronda += 1
@@ -168,35 +211,36 @@ def juego_simon():
 
         print("Ronda:", ronda)
 
-        limpiar_botones()
-        time.sleep(0.3)
-
         for s in secuencia:
+
+            if salir_presionado():
+                return
+
             activar_salida(s)
             time.sleep(0.5)
             apagar()
-            time.sleep(0.35)
-
-        limpiar_botones()
-        time.sleep(0.2)
+            time.sleep(0.3)
 
         for esperado in secuencia:
+
+            if salir_presionado():
+                return
 
             jugador, correcto, _ = reaccion(esperado,1)
 
             if jugador == -1:
-                print("Saliste del simon dice")
                 return
 
             if not correcto:
-                print("Fallaste", ronda)
-                print("Puntuacion de simon dice:", ronda-1)
+                print("Fallaste en ronda", ronda)
+                print("Puntuacion:", ronda-1)
                 return
 
-            time.sleep(0.15)
-
 # en esta parte se escribe lo que se muestra al inicio cuando se corre el codigo osea el menu
+
 while True:
+
+    apagar()
 
     print("\n--------------------------")
     print("        MENU DE JUEGO")
@@ -208,20 +252,20 @@ while True:
 
     while True:
 
+        if salir_presionado():
+            break
+
         if anti_rebote(simonbot):
             esperar_suelte(simonbot)
-            print("\n Iniciando simon dice...")
             juego_simon()
             break
 
         if anti_rebote(boti1[0]):
             esperar_suelte(boti1[0])
-            print("\nModo 1 jugador seleccionado")
             reflejos(1)
             break
 
         if anti_rebote(boti2[0]):
             esperar_suelte(boti2[0])
-            print("\nModo 2 jugadores seleccionado")
             reflejos(2)
             break
